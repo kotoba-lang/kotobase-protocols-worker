@@ -115,6 +115,25 @@ superproject `secrets-location-map` skill (ADR-2607176000).
 them back. The CID matches what any IPFS tool computes for the same
 bytes.
 
+## Diagnostics
+
+`GET /_diag/health[?graph=<name>]` (ADR-2607178500) — public, read-only,
+never touches `kotobase.protocols.router` or `LocalStore`, just the real
+engine's own O(1) novelty-count check for one graph (default the shared
+graph; pass `?graph=atproto-repo/<did>` to inspect a tenant's own chain):
+
+```json
+{"graph": "kotobase-protocols-v2", "chain_present": true,
+ "novelty_size": 18, "should_fold": false}
+```
+
+Exists because diagnosing the fold gap (see "How it persists" above)
+required manually timing a plain read and guessing at the cause — this
+makes graph health directly observable instead. `should_fold: true`
+should never actually be seen in practice (`commit-changes!` folds
+automatically the moment `novelty_size` crosses the threshold); if it
+ever does, something's wrong with the auto-fold path itself.
+
 ## Seeding a git repo
 
 `bin/seed_git.cljs` pushes a local repo's loose objects, refs and HEAD

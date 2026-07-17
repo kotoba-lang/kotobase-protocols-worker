@@ -219,30 +219,62 @@
            (and (= "/" (:path req))
                 (= "ipfs" (router/surface-of (:host req) "kotobase.net"))))))
 
+(defn- diag-health? [req]
+  (and (= :get (:method req)) (= "/_diag/health" (:path req))))
+
+(defn- diag-health-response
+  "Read-only, public, out-of-band from kotobase.protocols.router
+  entirely — never touches LocalStore/the pure handlers, just the
+  engine's own novelty state for `graph` (default the shared graph;
+  `?graph=atproto-repo/<did>` inspects a tenant's own chain). Exists
+  because ADR-2607177500's unfolded-novelty incident had to be
+  diagnosed by manually timing a plain read and guessing at the cause
+  (ADR-2607178500) — this makes that observable directly."
+  [^js env req]
+  (let [g (or (get (:query req) "graph") graph/shared-graph)]
+    (-> (ks/diagnose! (.-STATE_BUCKET env) (or (.-KOTOBASE_R2_PREFIX env) "") g)
+        (.then (fn [{:keys [chain-present? novelty-size should-fold?]}]
+                 (ring->response
+                  {:status 200
+                   :headers {"content-type" "application/json"
+                             "cache-control" "no-store"}
+                   :body (json/encode
+                          {"graph" g
+                           "chain_present" chain-present?
+                           "novelty_size" novelty-size
+                           "should_fold" should-fold?})})))
+        (.catch (fn [e]
+                  (ring->response
+                   {:status 500
+                    :headers {"content-type" "application/json"}
+                    :body (json/encode {"error" "DiagnosticFailed" "message" (.-message e)})}))))))
+
 (defn- handle-request [^js env req body-ab]
-  (-> (if (core/write? req)
-        (write-authorized? env req body-ab)
-        (js/Promise.resolve true))
-      (.then
-       (fn [ok?]
-         (cond
-           (not ok?)
-           (ring->response
-            (core/unauthorized-response (some? (.-WRITE_TOKEN env))))
+  (if (diag-health? req)
+    (diag-health-response env req)
+    (-> (if (core/write? req)
+          (write-authorized? env req body-ab)
+          (js/Promise.resolve true))
+        (.then
+         (fn [ok?]
+           (cond
+             (not ok?)
+             (ring->response
+              (core/unauthorized-response (some? (.-WRITE_TOKEN env))))
 
-           (ipfs-post? req)
-           (-> (sha256 body-ab)
-               (.then (fn [digest]
-                        (with-retries
-                          env req
-                          {:ipfs-post
-                           {:cid (cid/cidv1-raw-sha256
-                                  (vec (js/Array.from (js/Uint8Array. digest))))
-                            :b64 (ab->b64 body-ab)
-                            :content-type (or (get (:headers req) "content-type")
-                                              "application/octet-stream")}}))))
+             (ipfs-post? req)
+             (-> (sha256 body-ab)
+                 (.then (fn [digest]
+                          (with-retries
+                            env req
+                            {:ipfs-post
+                             {:cid (cid/cidv1-raw-sha256
+                                    (vec (js/Array.from (js/Uint8Array. digest))))
+                              :b64 (ab->b64 body-ab)
+                              :content-type (or (get (:headers req) "content-type")
+                                                "application/octet-stream")}}))))
 
-           :else (with-retries env req nil))))))
+             :else (with-retries env req nil)))))))
 
 (def handler
   #js {:fetch (fn [^js request ^js env _ctx]

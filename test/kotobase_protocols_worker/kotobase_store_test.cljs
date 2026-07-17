@@ -185,3 +185,34 @@
                           "should-fold?'s own threshold means it must be below 64 post-fold")
                     (done)))
            (.catch (fn [e] (t/is false (str (.-message e) "\n" (.-stack e))) (done))))))))
+
+(deftest diagnose-empty-graph
+  (async done
+   (-> (ks/diagnose! (fake-bucket) "" "never-touched-graph")
+       (.then (fn [{:keys [chain-present? novelty-size should-fold?]}]
+                (t/is (false? chain-present?))
+                (t/is (= 0 novelty-size))
+                (t/is (false? should-fold?))
+                (done)))
+       (.catch (fn [e] (t/is false (.-message e)) (done))))))
+
+(deftest diagnose-after-one-commit-is-read-only
+  (async done
+   (let [bucket (fake-bucket)]
+     (-> (ks/hydrate-run-persist!
+          bucket "" "diag-graph"
+          (fn [seed]
+            (let [store (local/local-store seed)]
+              (st/-put store [:s3 "bkt"] "k" {:v 1})
+              {:after-state (content (local/snapshot store)) :response nil})))
+         (.then (fn [_] (ks/diagnose! bucket "" "diag-graph")))
+         (.then (fn [d1]
+                  (t/is (true? (:chain-present? d1)))
+                  (t/is (= 1 (:novelty-size d1)) "one commit, no fold yet, no prior novelty")
+                  (t/is (false? (:should-fold? d1)) "1 < default threshold 64")
+                  (ks/diagnose! bucket "" "diag-graph")))
+         (.then (fn [d2]
+                  (t/is (= 1 (:novelty-size d2))
+                        "calling diagnose! must not itself mutate novelty (read-only)")
+                  (done)))
+         (.catch (fn [e] (t/is false (str (.-message e) "\n" (.-stack e))) (done)))))))

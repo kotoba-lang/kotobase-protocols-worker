@@ -194,6 +194,30 @@
                  (-> (eng/commit! put! get-fn tx-data chain-cid crypto/encrypt-fn)
                      (.then #(fold-if-due! put! get-fn %))))))))
 
+;; --------------------------------------------------------------- diag
+
+(defn diagnose!
+  "Read-only health signal for `graph` (ADR-2607178500): no hydrate, no
+  LocalStore, no write — just the engine's own O(1) `novelty-size`/
+  `should-fold?` state-field reads via the SAME R2 trampoline every
+  other call in this module uses. Exists because diagnosing the
+  unfolded-novelty incident (ADR-2607177500) required manually timing
+  a plain read and guessing at the cause — this makes that observable
+  directly, without live forensics.
+  → Promise<{:chain-present? bool :novelty-size int :should-fold? bool}>."
+  [^js bucket pfx graph]
+  (-> (r2/r2-get-head bucket (r2/head-key pfx graph))
+      (.then
+       (fn [{:keys [chain]}]
+         (if (nil? chain)
+           (js/Promise.resolve {:chain-present? false :novelty-size 0 :should-fold? false})
+           (r2/with-blocks
+            (fn [cid] (r2/cached-block-bytes bucket pfx cid))
+            (fn [get-fn]
+              {:chain-present? true
+               :novelty-size (eng/novelty-size get-fn chain)
+               :should-fold? (eng/should-fold? get-fn chain)})))))))
+
 ;; --------------------------------------------------------- R2 wiring
 
 (defn hydrate-run-persist!
