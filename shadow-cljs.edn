@@ -15,4 +15,8 @@
  :builds
  {:worker {:target :esm
            :output-dir "out"
+           ;; Serialize compilation: parallel par-compile aborts
+           ;; ("still waiting for #{cljs.core}") under host CPU
+           ;; contention from concurrent agent builds on this machine.
+           :compiler-options {:parallel-build false}
            :modules {:worker {:exports {default kotobase-protocols-worker.worker/handler}}}}}}
