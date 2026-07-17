@@ -50,9 +50,22 @@ persistence:
    graph race window); a lost CAS retries the WHOLE cycle from a fresh
    head, ≤3 attempts, then `503`.
 
-One shared graph (`kotobase-protocols-v2`) for now — not yet per-tenant/
-per-DID; scoping storage by the CACAO-authenticated DID (below) is the
-natural next step, out of this pass's scope.
+**Which graph a request targets is per-tenant, not one shared object**
+(ADR-2607178000, `kotobase-protocols-worker.graph`): the 4 atproto
+`repo.*Record` operations resolve to `atproto-repo/<did>`, a physically
+separate R2 head/chain per repo DID — derived from the `repo` query
+param on reads (no auth needed to know WHERE to read; the same
+principle `kotobase-cljc-worker`'s own `canonical-graph` derivation
+uses) and the `repo` body field on writes, where it's already proven
+equal to the CACAO-verified signer (see Auth, below) before ever
+reaching storage. Two different DIDs' records genuinely cannot collide
+or leak into each other's listRecords, verified live: two independently
+keypaired writers each wrote `rkey "r1"` in the same collection name,
+and each one's `listRecords` returned exactly its own single record.
+Every other surface (s3/git/pinning) and atproto's own `sync.getBlob`
+(reads the shared, content-addressed block space `POST /ipfs`
+populates — not any repo's doc space) stay on one shared admin graph
+(`kotobase-protocols-v2`).
 
 ## Auth (writes only; reads are public, fail-closed otherwise)
 
@@ -75,6 +88,10 @@ A write (PUT/POST/DELETE) is accepted if **any** credential verifies:
     There is no "wrong DID" case to reject — a mismatched `repo` is simply
     not your graph, structurally, the same principle
     `kotobase-cljc-worker` uses to derive `canonical-graph(issuer, db_name)`.
+    As of ADR-2607178000 this is now backed by REAL per-repo-DID storage
+    isolation too (`kotobase-protocols-worker.graph`, below), not just an
+    access-control check over one shared doc space — a write can only ever
+    land in the signer's own physically separate R2 chain.
   - **s3 / git / pinning**: these surfaces have no DID-shaped resource
     identity yet (a bucket, a git repo, a pin request are just opaque
     strings, owned by nobody in particular). A valid CACAO here is honored

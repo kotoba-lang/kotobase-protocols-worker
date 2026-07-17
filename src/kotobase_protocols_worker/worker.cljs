@@ -1,54 +1,55 @@
 (ns kotobase-protocols-worker.worker
   "Cloudflare Worker shell for kotoba-lang/kotobase-protocols
   (ADR-2607174500, v0.2 ADR-2607176000, per-DID CACAO ADR-2607177000,
-  real datom-plane backend ADR-2607177500). Owns transport + auth +
-  persistence; all protocol logic lives in the pure library.
+  real datom-plane backend ADR-2607177500, per-DID graph isolation
+  ADR-2607178000). Owns transport + auth + persistence; all protocol
+  logic lives in the pure library.
 
   Request flow:
     1. read raw body (ArrayBuffer) once; decode text view for the router
-    2. writes: authorize — Bearer WRITE_TOKEN (full admin), AWS SigV4
+    2. kotobase-protocols-worker.graph/for-request picks WHICH R2 head/
+       chain this request targets: the
+       4 atproto repo.*Record NSIDs resolve to a per-repo-DID graph
+       (`atproto-repo/<did>`, derived from the `repo` query param on
+       reads / body field on writes — no auth needed to know WHERE to
+       read, same principle as kotobase-cljc-worker's own
+       canonical-graph derivation); every other request (s3/git/
+       pinning, and atproto's OWN sync.getBlob, which reads the shared
+       block space, not a repo's doc space) uses the single shared
+       admin graph
+    3. writes: authorize — Bearer WRITE_TOKEN (full admin), AWS SigV4
        over the raw payload (S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY),
        or a CACAO (kotobase-protocols-worker.cacao): on the atproto
        surface a valid CACAO authorizes a write only when its issuer
        DID equals the request's `repo` field (per-DID, structural — no
-       client-supplied target DID to disagree with, ADR-2607177000);
-       on every other surface a valid CACAO is honored only when its
-       issuer is in CACAO_OPERATOR_DIDS (admin-equivalent, same
-       allowlist shape kotobase-cljc-worker's own `authorized?` uses)
-    3. kotobase-protocols-worker.kotobase-store/hydrate-run-persist!
+       client-supplied target DID to disagree with, ADR-2607177000) —
+       combined with step 2, this means a write is authorized to reach
+       a per-DID graph ONLY when the verified signer IS that DID, the
+       same structural guarantee kotobase-cljc-worker's own
+       canonical-graph(issuer, db_name) makes; on every other surface a
+       valid CACAO is honored only when its issuer is in
+       CACAO_OPERATOR_DIDS (admin-equivalent, same allowlist shape
+       kotobase-cljc-worker's own `authorized?` uses)
+    4. kotobase-protocols-worker.kotobase-store/hydrate-run-persist!
        does hydrate (real kotobase-peer content-addressed blocks in R2,
        not one opaque EDN blob) → LocalStore → pure router (sync) →
        diff → commit + head-CAS, all as ONE cycle (ADR-2607177500)
        – POST /ipfs short-circuits: sha256(raw body) → CIDv1 (library
          framing) → block stored base64 → {\"cid\": …}
-    4. a lost head-CAS (:persisted false) retries the WHOLE cycle from
+    5. a lost head-CAS (:persisted false) retries the WHOLE cycle from
        a fresh head read, ≤3 attempts
-    5. responses flagged :body-encoding :base64 (seeded git objects /
+    6. responses flagged :body-encoding :base64 (seeded git objects /
        ipfs blocks) are decoded back to raw bytes."
   (:require [clojure.string :as str]
             [kotobase-protocols-worker.cacao :as cacao]
             [kotobase-protocols-worker.core :as core]
+            [kotobase-protocols-worker.graph :as graph]
             [kotobase-protocols-worker.kotobase-store :as ks]
             [kotobase-protocols-worker.sigv4 :as sigv4]
             [kotobase.protocols.blocks :as blocks]
             [kotobase.protocols.cid :as cid]
             [kotobase.protocols.json :as json]
             [kotobase.protocols.router :as router]))
-
-;; Single shared graph — not yet per-tenant/per-DID (ADR-2607177500
-;; not-decided: scoping this by the CACAO-authenticated DID, once one
-;; is present, is the natural next step but out of THIS pass's scope,
-;; same as the atproto per-DID auth work not inventing per-resource
-;; ownership for the other three surfaces).
-;;
-;; v2, not v1: v1 accumulated ~150 unfolded commits across this
-;; session's own testing (kotobase-store's commit-changes! didn't call
-;; fold! yet) before that gap was found and fixed, degrading even a
-;; plain read to >30s. Its blocks are harmless orphans in R2 (content-
-;; addressed, no cleanup needed) but its HEAD is a known-bad starting
-;; point to build on — v2 starts clean with folding wired in from
-;; the first commit.
-(def ^:private graph "kotobase-protocols-v2")
 
 ;; ---------------------------------------------------------------- bytes
 
@@ -121,15 +122,6 @@
                                   (sigv4/scope p) crh))))
                        (.then (fn [sig] (= sig (:signature p))))))))))))))
 
-(defn- atproto-surface?
-  "Same host/path shape kotobase.protocols.router uses to route to the
-  atproto handler — checked independently here (before the router
-  runs) so the CACAO per-DID rule applies to exactly the requests that
-  will land on that surface."
-  [req]
-  (or (= "atproto" (router/surface-of (:host req) "kotobase.net"))
-      (str/starts-with? (or (:path req) "") "/xrpc/")))
-
 (defn- cacao-authorized?
   "Promise<boolean>. Parses the body only on this fallback path (Bearer
   and SigV4 never need it) — a large S3/ipfs write body is never
@@ -141,7 +133,7 @@
     (js/Promise.resolve
      (boolean
       (and issuer
-           (if (atproto-surface? req)
+           (if (graph/atproto-surface? req)
              (= issuer (get parsed "repo"))
              (cacao/operator-allowed? issuer (.-CACAO_OPERATOR_DIDS env))))))))
 
@@ -196,7 +188,7 @@
   write?/state-changed? gate needed here anymore."
   [^js env req extra]
   (ks/hydrate-run-persist!
-   (.-STATE_BUCKET env) (or (.-KOTOBASE_R2_PREFIX env) "") graph
+   (.-STATE_BUCKET env) (or (.-KOTOBASE_R2_PREFIX env) "") (graph/for-request req)
    (fn [seed]
      (let [{:keys [store state]} (core/make-store seed)
            ctx {:store store

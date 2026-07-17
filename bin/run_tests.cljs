@@ -5,6 +5,7 @@
 (ns run-tests
   (:require [cljs.test :as t]
             [kotobase-protocols-worker.core-test]
+            [kotobase-protocols-worker.graph-test]
             [kotobase-protocols-worker.sigv4-test]))
 
 (defmethod t/report [:cljs.test/default :end-run-tests] [m]
@@ -12,4 +13,5 @@
     (set! (.-exitCode js/process) 1)))
 
 (t/run-tests 'kotobase-protocols-worker.core-test
+             'kotobase-protocols-worker.graph-test
              'kotobase-protocols-worker.sigv4-test)
