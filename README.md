@@ -31,13 +31,38 @@ single-object scale: state must fit in memory, and write throughput is
 one-writer-at-a-time. That is the declared v0 trade-off; per-collection
 sharding / Durable Objects / the real kotobase datom plane are follow-ups.
 
-## Auth
+## Auth (writes only; reads are public, fail-closed otherwise)
 
-Reads are public. **Writes require `authorization: Bearer <WRITE_TOKEN>`**
-and fail closed (401) when the secret is unset. The token lives in the
-Worker secret `WRITE_TOKEN`; the operator copy is in the macOS Keychain,
-service `cf:kotobase-protocols-worker`, account `WRITE_TOKEN` (reference
-only — see the superproject `secrets-location-map` skill).
+A write (PUT/POST/DELETE) is accepted if **either** credential verifies:
+
+- **Bearer** — `authorization: Bearer <WRITE_TOKEN>`.
+- **AWS SigV4** — `authorization: AWS4-HMAC-SHA256 …` verified against
+  `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` over the raw payload
+  (`curl --aws-sigv4 "aws:amz:auto:s3" --user "$AKID:$SECRET"` or any
+  aws-sdk S3 client pointed at `s3.kotobase.net`).
+
+All three are Worker secrets; operator copies are in the macOS Keychain,
+service `cf:kotobase-protocols-worker` (accounts `WRITE_TOKEN`,
+`S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) — reference only, see the
+superproject `secrets-location-map` skill (ADR-2607176000).
+
+## Content addressing
+
+`POST /ipfs` with a raw body mints a **real CIDv1** (`sha2-256`, codec
+`raw`, base32 `bafkrei…`) and stores the bytes; `GET /ipfs/{cid}` serves
+them back. The CID matches what any IPFS tool computes for the same
+bytes.
+
+## Seeding a git repo
+
+`bin/seed_git.cljs` pushes a local repo's loose objects, refs and HEAD
+into the git surface so it clones over dumb-HTTP:
+
+```bash
+KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljs \
+  <local-repo> kotoba-lang/<name> https://git.kotobase.net
+git clone https://git.kotobase.net/kotoba-lang/<name>
+```
 
 ## Develop
 
