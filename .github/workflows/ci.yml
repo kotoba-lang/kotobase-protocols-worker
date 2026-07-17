@@ -21,6 +21,10 @@ jobs:
           # Same pin as kotobase-protocols' deps.edn.
           ref: bbf57df9dde5c1869182012860129a598382e088
           path: kotobase
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/kotobase-client
+          path: kotobase-client
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -32,8 +36,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: shadow-cljs release build
+      - name: npm install (CACAO verify needs real @noble/curves + @ipld/dag-cbor)
+        working-directory: kotobase-protocols-worker
+        run: npm ci
+      - name: node-test (CACAO real-crypto verify, ADR-2607177000)
         working-directory: kotobase-protocols-worker
         run: |
-          npm ci
-          npx shadow-cljs release worker
+          npx shadow-cljs compile test
+          node out/node-tests.js
+      - name: shadow-cljs release build
+        working-directory: kotobase-protocols-worker
+        run: npx shadow-cljs release worker
