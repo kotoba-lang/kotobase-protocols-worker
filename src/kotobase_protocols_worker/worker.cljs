@@ -1,12 +1,20 @@
 (ns kotobase-protocols-worker.worker
   "Cloudflare Worker shell for kotoba-lang/kotobase-protocols
-  (ADR-2607174500, v0.2 additions ADR-2607176000). Owns transport +
-  auth + persistence; all protocol logic lives in the pure library.
+  (ADR-2607174500, v0.2 ADR-2607176000, per-DID CACAO ADR-2607177000).
+  Owns transport + auth + persistence; all protocol logic lives in the
+  pure library.
 
   Request flow:
     1. read raw body (ArrayBuffer) once; decode text view for the router
-    2. writes: authorize — Bearer WRITE_TOKEN, or AWS SigV4 over the
-       raw payload (S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY secrets)
+    2. writes: authorize — Bearer WRITE_TOKEN (full admin), AWS SigV4
+       over the raw payload (S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY),
+       or a CACAO (kotobase-protocols-worker.cacao): on the atproto
+       surface a valid CACAO authorizes a write only when its issuer
+       DID equals the request's `repo` field (per-DID, structural — no
+       client-supplied target DID to disagree with, ADR-2607177000);
+       on every other surface a valid CACAO is honored only when its
+       issuer is in CACAO_OPERATOR_DIDS (admin-equivalent, same
+       allowlist shape kotobase-cljc-worker's own `authorized?` uses)
     3. hydrate R2 state → LocalStore → pure router (sync)
        – POST /ipfs short-circuits: sha256(raw body) → CIDv1 (library
          framing) → block stored base64 → {\"cid\": …}
@@ -15,6 +23,7 @@
        ipfs blocks) are decoded back to raw bytes."
   (:require [cljs.reader :as reader]
             [clojure.string :as str]
+            [kotobase-protocols-worker.cacao :as cacao]
             [kotobase-protocols-worker.core :as core]
             [kotobase-protocols-worker.sigv4 :as sigv4]
             [kotobase.protocols.blocks :as blocks]
@@ -95,6 +104,30 @@
                                   (sigv4/scope p) crh))))
                        (.then (fn [sig] (= sig (:signature p))))))))))))))
 
+(defn- atproto-surface?
+  "Same host/path shape kotobase.protocols.router uses to route to the
+  atproto handler — checked independently here (before the router
+  runs) so the CACAO per-DID rule applies to exactly the requests that
+  will land on that surface."
+  [req]
+  (or (= "atproto" (router/surface-of (:host req) "kotobase.net"))
+      (str/starts-with? (or (:path req) "") "/xrpc/")))
+
+(defn- cacao-authorized?
+  "Promise<boolean>. Parses the body only on this fallback path (Bearer
+  and SigV4 never need it) — a large S3/ipfs write body is never
+  JSON-parsed just to look for a CACAO that isn't there."
+  [^js env req]
+  (let [parsed (try (json/parse (or (:body req) "{}")) (catch :default _ {}))
+        token (cacao/from-request req parsed)
+        issuer (some-> token cacao/verify-cacao)]
+    (js/Promise.resolve
+     (boolean
+      (and issuer
+           (if (atproto-surface? req)
+             (= issuer (get parsed "repo"))
+             (cacao/operator-allowed? issuer (.-CACAO_OPERATOR_DIDS env))))))))
+
 (defn- write-authorized? [^js env req body-ab]
   (cond
     (core/authorized-write? req (.-WRITE_TOKEN env))
@@ -104,7 +137,7 @@
             (str/starts-with? "AWS4-HMAC-SHA256 "))
     (sigv4-verify env req body-ab)
 
-    :else (js/Promise.resolve false)))
+    :else (cacao-authorized? env req)))
 
 ;; ------------------------------------------------------------- requests
 

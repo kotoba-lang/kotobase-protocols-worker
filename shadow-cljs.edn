@@ -7,8 +7,14 @@
 ;; superproject (repo-wide build governor).
 {:source-paths
  ["src"
+  "test"
   "../kotobase-protocols/src"
-  "../kotobase/src"]
+  "../kotobase/src"
+  ;; CACAO verify (ADR-2607177000): kotobase-client is the byte-exact
+  ;; mint/verify implementation the kotobase.net edge already uses
+  ;; (kotobase-cljc-worker). cljs-only (not .cljc) — @noble/curves has
+  ;; no JVM analogue here.
+  "../kotobase-client/src"]
 
  :dependencies []
 
@@ -19,4 +25,11 @@
            ;; ("still waiting for #{cljs.core}") under host CPU
            ;; contention from concurrent agent builds on this machine.
            :compiler-options {:parallel-build false}
-           :modules {:worker {:exports {default kotobase-protocols-worker.worker/handler}}}}}}
+           :modules {:worker {:exports {default kotobase-protocols-worker.worker/handler}}}}
+  ;; node-test, not nbb: CACAO verify needs real @noble/curves/@ipld/dag-cbor
+  ;; npm modules — same choice kotobase-client's own test suite makes, and
+  ;; cljs ranks above nbb in the repo-wide runtime priority anyway.
+  :test {:target :node-test
+         :output-to "out/node-tests.js"
+         :ns-regexp "-test$"
+         :compiler-options {:parallel-build false}}}}

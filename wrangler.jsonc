@@ -27,6 +27,12 @@
     { "binding": "STATE_BUCKET", "bucket_name": "kotobase-protocols-state" }
   ],
   "vars": {
-    "APEX": "kotobase.net"
+    "APEX": "kotobase.net",
+    // CSV of did:key operator identities a valid CACAO may authorize
+    // writes as an admin equivalent on non-atproto surfaces
+    // (ADR-2607177000). Empty = a CACAO grants nothing there — it still
+    // works for its primary purpose, per-DID atproto writes (repo must
+    // equal the CACAO's issuer), which needs no allowlist at all.
+    "CACAO_OPERATOR_DIDS": ""
   }
 }

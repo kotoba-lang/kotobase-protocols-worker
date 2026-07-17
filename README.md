@@ -11,7 +11,8 @@ Cloudflare Worker **deploy shell** for
 | `s3.kotobase.net` | S3 object API |
 | `atproto.kotobase.net` | AT-Proto XRPC tenant data-plane |
 | `git.kotobase.net` | git dumb-HTTP (read) |
-| `kotobase-protocols-worker.*.workers.dev` | all of the above via `/s3/*`, `/xrpc/*`, `/git/*`, `/ipfs/*` |
+| `pinning.kotobase.net` | [IPFS Pinning Service API](https://ipfs.github.io/pinning-services-api-spec/) |
+| `kotobase-protocols-worker.*.workers.dev` | all of the above via `/s3/*`, `/xrpc/*`, `/git/*`, `/ipfs/*`, `/pins*` |
 
 `ipfs.kotobase.net` is deliberately **not** routed here — that hostname is
 owned by `gftdcojp/net-kotobase-ipfs` (ADR-2607072000).
@@ -33,15 +34,37 @@ sharding / Durable Objects / the real kotobase datom plane are follow-ups.
 
 ## Auth (writes only; reads are public, fail-closed otherwise)
 
-A write (PUT/POST/DELETE) is accepted if **either** credential verifies:
+A write (PUT/POST/DELETE) is accepted if **any** credential verifies:
 
-- **Bearer** — `authorization: Bearer <WRITE_TOKEN>`.
+- **Bearer** — `authorization: Bearer <WRITE_TOKEN>`. Full admin, every surface.
 - **AWS SigV4** — `authorization: AWS4-HMAC-SHA256 …` verified against
   `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` over the raw payload
   (`curl --aws-sigv4 "aws:amz:auto:s3" --user "$AKID:$SECRET"` or any
-  aws-sdk S3 client pointed at `s3.kotobase.net`).
+  aws-sdk S3 client pointed at `s3.kotobase.net`). Full admin, every surface
+  (not S3-scoped in this worker — see ADR-2607177000 for the honest note).
+- **CACAO** — `{"cacao_b64": "…"}` in the JSON body, or
+  `authorization: CACAO <b64>` (ADR-2607177000). Verified byte-exact against
+  what `kotobase.net`'s own edge (`kotobase-cljc-worker`) checks: Ed25519
+  signature over the CACAO's SIWE message, under the `did:key` in its `iss`.
+  What it then authorizes is **per-surface**, not universal:
+  - **atproto**: a valid CACAO authorizes a write **only when its issuer DID
+    equals the request's `repo` field** — you can write your own AT-Proto
+    records with nothing but your own keypair, no shared secret needed.
+    There is no "wrong DID" case to reject — a mismatched `repo` is simply
+    not your graph, structurally, the same principle
+    `kotobase-cljc-worker` uses to derive `canonical-graph(issuer, db_name)`.
+  - **s3 / git / pinning**: these surfaces have no DID-shaped resource
+    identity yet (a bucket, a git repo, a pin request are just opaque
+    strings, owned by nobody in particular). A valid CACAO here is honored
+    only when its issuer is in `CACAO_OPERATOR_DIDS` (a CSV var) — i.e. it
+    behaves as an alternate admin credential, not a scoped one. This is a
+    known, documented limitation, not an oversight: inventing a
+    bucket-per-DID or pin-per-DID ownership model wasn't asked for and
+    would be its own design decision. `CACAO_OPERATOR_DIDS` defaults to
+    empty, meaning **CACAO grants nothing at all** on these three surfaces
+    until an operator DID is explicitly added.
 
-All three are Worker secrets; operator copies are in the macOS Keychain,
+All secrets are Worker secrets; operator copies are in the macOS Keychain,
 service `cf:kotobase-protocols-worker` (accounts `WRITE_TOKEN`,
 `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) — reference only, see the
 superproject `secrets-location-map` skill (ADR-2607176000).
