@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: kotobase-protocols-worker
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/kotobase-protocols
+          path: kotobase-protocols
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/kotobase
+          # Same pin as kotobase-protocols' deps.edn.
+          ref: bbf57df9dde5c1869182012860129a598382e088
+          path: kotobase
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --global nbb
+      - name: nbb tests (pure shell logic)
+        working-directory: kotobase-protocols-worker
+        run: nbb --classpath "src:test:../kotobase-protocols/src:../kotobase/src" bin/run_tests.cljs
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: shadow-cljs release build
+        working-directory: kotobase-protocols-worker
+        run: |
+          npm ci
+          npx shadow-cljs release worker

@@ -1,0 +1,18 @@
+;; Deploy shell for kotoba-lang/kotobase-protocols (ADR-2607174500).
+;; Library deps are consumed as shadow source-paths from the west checkout
+;; (same pattern as kotobase-cljc-worker), relative to
+;; orgs/kotoba-lang/kotobase-protocols-worker → orgs/kotoba-lang/<dep>.
+;; Build: npx shadow-cljs release worker → out/worker.js (:esm, default
+;; export {fetch}) — run through scripts/resource-guard.mjs in the
+;; superproject (repo-wide build governor).
+{:source-paths
+ ["src"
+  "../kotobase-protocols/src"
+  "../kotobase/src"]
+
+ :dependencies []
+
+ :builds
+ {:worker {:target :esm
+           :output-dir "out"
+           :modules {:worker {:exports {default kotobase-protocols-worker.worker/handler}}}}}}

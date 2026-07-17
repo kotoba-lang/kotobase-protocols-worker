@@ -1,0 +1,12 @@
+{
+  "name": "kotobase-protocols-worker",
+  "private": true,
+  "scripts": {
+    "build": "shadow-cljs release worker",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "shadow-cljs": "^2.28.20",
+    "wrangler": "^4.0.0"
+  }
+}

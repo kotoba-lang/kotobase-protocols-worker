@@ -1,0 +1,28 @@
+{
+  // kotobase-protocols deploy shell (ADR-2607174500): serves the s3 /
+  // atproto / git surfaces of kotoba-lang/kotobase-protocols on
+  // *.kotobase.net. ipfs.kotobase.net is deliberately ABSENT — that
+  // hostname is owned by gftdcojp/net-kotobase-ipfs (ADR-2607072000);
+  // this worker's /ipfs/* only answers on workers.dev (single-origin
+  // fallback) for self-hosted-style access.
+  //
+  // Build: npx shadow-cljs release worker → out/worker.js
+  // Writes are fail-closed without the WRITE_TOKEN secret
+  // (wrangler secret put WRITE_TOKEN).
+  "name": "kotobase-protocols-worker",
+  "main": "out/worker.js",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "s3.kotobase.net", "custom_domain": true },
+    { "pattern": "atproto.kotobase.net", "custom_domain": true },
+    { "pattern": "git.kotobase.net", "custom_domain": true }
+  ],
+  "r2_buckets": [
+    { "binding": "STATE_BUCKET", "bucket_name": "kotobase-protocols-state" }
+  ],
+  "vars": {
+    "APEX": "kotobase.net"
+  }
+}
