@@ -4,13 +4,12 @@
   a workerd runtime (same split as kotobase-cljc-worker: pure handler
   vs edge shell).
 
-  The shell's storage model (ADR-2607174500): hydrate the WHOLE
-  IStore state from one R2 object into kotobase.local/LocalStore, run
-  the pure kotobase.protocols router synchronously, and persist the
-  snapshot back with an etag-conditional put (optimistic lock, retry
-  on conflict). Deliberately v0: single-object state bounds scale and
-  write concurrency, in exchange for reusing LocalStore/snapshot as-is
-  with zero async plumbing in the handlers."
+  `make-store` seeds a plain in-process kotobase.local/LocalStore that
+  the pure kotobase.protocols router runs against synchronously for
+  ONE request — same LocalStore either standalone (OSS) or, wired to
+  the real content-addressed backend, as the per-request in-memory
+  materialization kotobase-protocols-worker.kotobase-store hydrates
+  from and diffs back to R2 (ADR-2607177500)."
   (:require [clojure.string :as str]
             [kotobase.local :as local]))
 
@@ -48,12 +47,6 @@
    :body (if token-configured?
            "unauthorized: writes require a bearer token"
            "unauthorized: write token not configured (writes are disabled)")})
-
-(defn state-changed?
-  "Persist only when the handler actually mutated the store —
-  LocalStore bumps :revision on every mutation."
-  [before-snapshot after-snapshot]
-  (not= (:revision before-snapshot) (:revision after-snapshot)))
 
 (defn normalize-headers
   "Lower-case header names once at the boundary."

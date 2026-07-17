@@ -14,7 +14,17 @@
   ;; mint/verify implementation the kotobase.net edge already uses
   ;; (kotobase-cljc-worker). cljs-only (not .cljc) — @noble/curves has
   ;; no JVM analogue here.
-  "../kotobase-client/src"]
+  "../kotobase-client/src"
+  ;; Real datom-plane engine (ADR-2607177500), same dep chain
+  ;; kotobase-cljc-worker itself consumes as sibling source-paths.
+  "../kotobase-peer/src"
+  "../datom/src"
+  "../arrangement/src"
+  "../prolly-tree/src"
+  "../chain/src"
+  "../io-ipld/src"
+  "../io-multiformats/src"
+  "../org-ietf-cbor/src"]
 
  :dependencies []
 

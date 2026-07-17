@@ -1,8 +1,8 @@
 (ns kotobase-protocols-worker.worker
   "Cloudflare Worker shell for kotoba-lang/kotobase-protocols
-  (ADR-2607174500, v0.2 ADR-2607176000, per-DID CACAO ADR-2607177000).
-  Owns transport + auth + persistence; all protocol logic lives in the
-  pure library.
+  (ADR-2607174500, v0.2 ADR-2607176000, per-DID CACAO ADR-2607177000,
+  real datom-plane backend ADR-2607177500). Owns transport + auth +
+  persistence; all protocol logic lives in the pure library.
 
   Request flow:
     1. read raw body (ArrayBuffer) once; decode text view for the router
@@ -15,23 +15,40 @@
        on every other surface a valid CACAO is honored only when its
        issuer is in CACAO_OPERATOR_DIDS (admin-equivalent, same
        allowlist shape kotobase-cljc-worker's own `authorized?` uses)
-    3. hydrate R2 state → LocalStore → pure router (sync)
+    3. kotobase-protocols-worker.kotobase-store/hydrate-run-persist!
+       does hydrate (real kotobase-peer content-addressed blocks in R2,
+       not one opaque EDN blob) → LocalStore → pure router (sync) →
+       diff → commit + head-CAS, all as ONE cycle (ADR-2607177500)
        – POST /ipfs short-circuits: sha256(raw body) → CIDv1 (library
          framing) → block stored base64 → {\"cid\": …}
-    4. writes: persist snapshot back, etag-conditional, ≤3 attempts
+    4. a lost head-CAS (:persisted false) retries the WHOLE cycle from
+       a fresh head read, ≤3 attempts
     5. responses flagged :body-encoding :base64 (seeded git objects /
        ipfs blocks) are decoded back to raw bytes."
-  (:require [cljs.reader :as reader]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [kotobase-protocols-worker.cacao :as cacao]
             [kotobase-protocols-worker.core :as core]
+            [kotobase-protocols-worker.kotobase-store :as ks]
             [kotobase-protocols-worker.sigv4 :as sigv4]
             [kotobase.protocols.blocks :as blocks]
             [kotobase.protocols.cid :as cid]
             [kotobase.protocols.json :as json]
             [kotobase.protocols.router :as router]))
 
-(def state-key "kotobase-protocols/state.edn")
+;; Single shared graph — not yet per-tenant/per-DID (ADR-2607177500
+;; not-decided: scoping this by the CACAO-authenticated DID, once one
+;; is present, is the natural next step but out of THIS pass's scope,
+;; same as the atproto per-DID auth work not inventing per-resource
+;; ownership for the other three surfaces).
+;;
+;; v2, not v1: v1 accumulated ~150 unfolded commits across this
+;; session's own testing (kotobase-store's commit-changes! didn't call
+;; fold! yet) before that gap was found and fixed, degrading even a
+;; plain read to >30s. Its blocks are harmless orphans in R2 (content-
+;; addressed, no cleanup needed) but its HEAD is a known-bad starting
+;; point to build on — v2 starts clean with folding wired in from
+;; the first commit.
+(def ^:private graph "kotobase-protocols-v2")
 
 ;; ---------------------------------------------------------------- bytes
 
@@ -162,20 +179,6 @@
 
 ;; ---------------------------------------------------------- persistence
 
-(defn- hydrate [^js env]
-  (-> (.get (.-STATE_BUCKET env) state-key)
-      (.then (fn [^js obj]
-               (if obj
-                 (.then (.text obj)
-                        (fn [txt] {:seed (reader/read-string txt)
-                                   :etag (.-etag obj)}))
-                 {:seed nil :etag nil})))))
-
-(defn- persist [^js env snapshot etag]
-  (let [opts (when etag #js {:onlyIf #js {:etagMatches etag}})]
-    (-> (.put (.-STATE_BUCKET env) state-key (pr-str snapshot) opts)
-        (.then (fn [put-result] (some? put-result))))))
-
 (defn- ipfs-post-response [store {:keys [cid b64 content-type]}]
   (blocks/put-block! store cid {:bytes b64 :encoding "base64"
                                 :content-type content-type})
@@ -186,30 +189,30 @@
 
 (defn- run-once
   "extra may carry :ipfs-post {:cid :b64 :content-type} — a shell-level
-  write that bypasses the (read-only) ipfs HTTP surface."
+  write that bypasses the (read-only) ipfs HTTP surface. One full
+  hydrate→run→diff→commit cycle against the real chain — reads
+  naturally no-op (their after-state never differs from the hydrated
+  seed) via kotobase-store's own :docs/:streams diff, no separate
+  write?/state-changed? gate needed here anymore."
   [^js env req extra]
-  (-> (hydrate env)
-      (.then (fn [{:keys [seed etag]}]
-               (let [{:keys [store state]} (core/make-store seed)
-                     before @state
-                     ctx {:store store
-                          :apex (or (.-APEX env) "kotobase.net")
-                          :now (.toISOString (js/Date.))}
-                     resp (if-let [ip (:ipfs-post extra)]
-                            (ipfs-post-response store ip)
-                            (router/handle ctx req))
-                     after @state]
-                 (if (and (core/write? req) (core/state-changed? before after))
-                   (.then (persist env after etag)
-                          (fn [ok?] {:resp resp :persisted ok?}))
-                   {:resp resp :persisted true}))))))
+  (ks/hydrate-run-persist!
+   (.-STATE_BUCKET env) (or (.-KOTOBASE_R2_PREFIX env) "") graph
+   (fn [seed]
+     (let [{:keys [store state]} (core/make-store seed)
+           ctx {:store store
+                :apex (or (.-APEX env) "kotobase.net")
+                :now (.toISOString (js/Date.))}
+           resp (if-let [ip (:ipfs-post extra)]
+                  (ipfs-post-response store ip)
+                  (router/handle ctx req))]
+       {:after-state @state :response resp}))))
 
 (defn- with-retries [^js env req extra]
   (letfn [(attempt [n]
             (.then (run-once env req extra)
-                   (fn [{:keys [resp persisted]}]
+                   (fn [{:keys [response persisted]}]
                      (cond
-                       persisted (ring->response resp)
+                       persisted (ring->response response)
                        (pos? n) (attempt (dec n))
                        :else (ring->response
                               {:status 503

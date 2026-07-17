@@ -21,17 +21,6 @@
       (is (not (core/authorized-write? (req "Bearer ") "")))
       (is (= 401 (:status (core/unauthorized-response false)))))))
 
-(deftest state-change-detection-via-revision
-  (let [{:keys [store state]} (core/make-store nil)
-        ctx {:store store :apex "kotobase.net"}
-        before @state]
-    (router/handle ctx {:method :get :host "s3.kotobase.net" :path "/bkt"})
-    (is (not (core/state-changed? before @state))
-        "reads do not require persistence")
-    (router/handle ctx {:method :put :host "s3.kotobase.net"
-                        :path "/bkt/k" :body "v"})
-    (is (core/state-changed? before @state))))
-
 (deftest snapshot-seed-round-trip
   ;; the shell's whole persistence model: state → pr-str → read →
   ;; seed a fresh store → same responses

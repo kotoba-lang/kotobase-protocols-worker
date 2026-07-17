@@ -6,9 +6,35 @@
   // this worker's /ipfs/* only answers on workers.dev (single-origin
   // fallback) for self-hosted-style access.
   //
+  // git.kotobase.net is ALSO deliberately absent from routes below
+  // (ADR-2607177500 incident note): a concurrent session's OWN Worker
+  // (Cloudflare Workers service name "kotobase-git", created/modified
+  // 2026-07-17 mid-session) claimed that custom domain out from under
+  // this Worker's earlier deploys — Cloudflare custom domains are
+  // single-owner and silently reassign to whichever Worker's
+  // `wrangler deploy` last declared the route, no conflict surfaced to
+  // either side. Confirmed via the Workers accounts/.../workers/domains
+  // API (git.kotobase.net -> service "kotobase-git", every other
+  // hostname here -> "kotobase-protocols-worker") and the zone's
+  // firewallEventsAdaptive log (zero WAF/firewall events for
+  // git.kotobase.net at all, ruling that out as the 405 source this
+  // session hit repeatedly). Re-claiming it would be destructive
+  // interference with that other session's in-progress work (the
+  // "並行エージェント運用" guardrail in this workspace's CLAUDE.md) —
+  // NOT re-added here. The git surface itself is fully verified via
+  // the workers.dev /git/* single-origin path (real `git clone`
+  // succeeded end to end against the real content-addressed backend);
+  // only the git.kotobase.net hostname is contested.
+  //
   // Build: npx shadow-cljs release worker → out/worker.js
   // Writes are fail-closed without the WRITE_TOKEN secret
   // (wrangler secret put WRITE_TOKEN).
+  //
+  // STATE_BUCKET (ADR-2607177500, name kept from the v0 EDN-blob era for
+  // continuity — no bucket migration needed): real content-addressed
+  // kotobase-peer blocks under KOTOBASE_R2_PREFIX + "blocks/<cid>", one
+  // mutable head pointer at KOTOBASE_R2_PREFIX + "heads/kotobase-protocols-v1"
+  // (etag-CAS'd), NOT a single opaque EDN blob anymore.
   "name": "kotobase-protocols-worker",
   "main": "out/worker.js",
   "compatibility_date": "2026-06-01",
@@ -17,7 +43,9 @@
   "routes": [
     { "pattern": "s3.kotobase.net", "custom_domain": true },
     { "pattern": "atproto.kotobase.net", "custom_domain": true },
-    { "pattern": "git.kotobase.net", "custom_domain": true },
+    // git.kotobase.net intentionally NOT listed — see the comment
+    // block above (contested with a concurrent session's own Worker).
+    // /git/* still works, on workers.dev.
     // IPFS Pinning Service API — its own host keeps ipfs.<apex> read-only
     // (ADR-2607172210 routing note). ipfs.kotobase.net stays with
     // net-kotobase-ipfs (ADR-2607072000).
@@ -33,6 +61,9 @@
     // (ADR-2607177000). Empty = a CACAO grants nothing there — it still
     // works for its primary purpose, per-DID atproto writes (repo must
     // equal the CACAO's issuer), which needs no allowlist at all.
-    "CACAO_OPERATOR_DIDS": ""
+    "CACAO_OPERATOR_DIDS": "",
+    // Key prefix under STATE_BUCKET for the real content-addressed
+    // blocks/head (ADR-2607177500). Empty = keys at the bucket root.
+    "KOTOBASE_R2_PREFIX": ""
   }
 }

@@ -25,6 +25,40 @@ jobs:
         with:
           repository: kotoba-lang/kotobase-client
           path: kotobase-client
+      # Real datom-plane engine dep chain (ADR-2607177500) — same
+      # sibling-checkout pattern kotobase-cljc-worker itself uses.
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/kotobase-peer
+          path: kotobase-peer
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/datom
+          path: datom
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/arrangement
+          path: arrangement
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/prolly-tree
+          path: prolly-tree
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/chain
+          path: chain
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/io-ipld
+          path: io-ipld
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/io-multiformats
+          path: io-multiformats
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/org-ietf-cbor
+          path: org-ietf-cbor
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -36,10 +70,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: npm install (CACAO verify needs real @noble/curves + @ipld/dag-cbor)
+      - name: npm install (CACAO verify + the real engine need @noble/curves,
+              @noble/hashes, @ipld/dag-cbor)
         working-directory: kotobase-protocols-worker
         run: npm ci
-      - name: node-test (CACAO real-crypto verify, ADR-2607177000)
+      - name: node-test (CACAO real-crypto verify + datom-store ≡ LocalStore,
+              ADR-2607177000/2607177500)
         working-directory: kotobase-protocols-worker
         run: |
           npx shadow-cljs compile test
