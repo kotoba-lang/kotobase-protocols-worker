@@ -39,6 +39,7 @@
           recomputing, so retries never collide on seq the way a
           counter cached across attempts could."
   (:require [clojure.edn :as edn]
+            [ipld.core :as ipld]
             [kotobase-peer.core :as eng]
             [kotobase-protocols-worker.kotobase-crypto :as crypto]
             [kotobase-protocols-worker.kotobase-r2 :as r2]))
@@ -176,23 +177,39 @@
   that accumulated ~150+ unfolded commits across a session's worth of
   testing made even a plain read take >30s). `should-fold?`/`novelty-
   size` are pure state-field reads (O(1), no decrypt needed) so this
-  check itself is cheap on every commit."
-  [put! get-fn chain-cid]
+  check itself is cheap on every commit.
+
+  `async-get-fn` (REQUIRED, not optional — see the ns-level guardrail note
+  below) is threaded to `eng/fold!`'s async-scan arity: fold's own
+  pre-fold hydrate walks the ENTIRE indexed snapshot via
+  `prolly-tree.core/scan-prefix`, and over the `with-blocks` sync-retry
+  trampoline (`kotobase-protocols-worker.kotobase-r2`) that walk is O(N²)
+  in the number of distinct blocks touched — confirmed live elsewhere in
+  this org (gftdcojp/app-aozora#78 / ADR-2607120730): a 5130-leaf
+  snapshot exceeded a 300s CPU budget over the sync path vs 806ms via
+  `scan-prefix-async`. `kotobase-cljc-worker.handler/do-fold` (the
+  reference implementation this module is a deploy shell for) already
+  wires this same `async-get-fn` into its own `eng/fold!` call — this
+  fn was missing it (kotoba-lang/kotobase-protocols-worker#1)."
+  [put! get-fn chain-cid async-get-fn]
   (if (eng/should-fold? get-fn chain-cid)
-    (eng/fold! put! get-fn chain-cid crypto/blind-fn crypto/encrypt-fn crypto/decrypt-fn)
+    (eng/fold! put! get-fn chain-cid ipld/link? nil
+               crypto/blind-fn crypto/encrypt-fn crypto/decrypt-fn
+               nil nil async-get-fn)
     (js/Promise.resolve chain-cid)))
 
 (defn commit-changes!
   "Promise<new-chain-cid | prev-chain-cid> — commits the before/after
   diff (empty diff → resolves to prev-chain-cid unchanged, no-op write),
-  folding afterward if the engine's own threshold says novelty is due."
-  [put! get-fn chain-cid before after]
+  folding afterward if the engine's own threshold says novelty is due.
+  `async-get-fn` — see `fold-if-due!`."
+  [put! get-fn chain-cid before after async-get-fn]
   (-> (diff->tx-data! get-fn chain-cid before after)
       (.then (fn [tx-data]
                (if (empty? tx-data)
                  (js/Promise.resolve chain-cid)
                  (-> (eng/commit! put! get-fn tx-data chain-cid crypto/encrypt-fn)
-                     (.then #(fold-if-due! put! get-fn %))))))))
+                     (.then #(fold-if-due! put! get-fn % async-get-fn))))))))
 
 ;; --------------------------------------------------------------- diag
 
@@ -234,12 +251,30 @@
   (kotobase-cljc-worker's run-write-attempt docstring): commit!'s own
   novelty-size re-reads the chain-cid it just committed BEFORE this fn
   flushes to R2, so get-fn must check the in-memory buffer first.
+  `async-get-fn` (threaded to `commit-changes!`/`fold-if-due!`, see
+  their docstrings) gets the SAME buffer-first check — NOT a direct,
+  unbuffered R2 fetch like `kotobase-cljc-worker.worker/run-write-
+  attempt`'s own `:async-get-fn`: if THIS request's own `commit!` is
+  what crosses the fold threshold, its just-buffered (not yet flushed
+  to R2) tx-block is exactly the kind of cid `fold!`'s novelty-read
+  step needs back, and an unbuffered async fetch would either return
+  nil (nothing at that key in R2 yet) into `ipld/decode`, which throws,
+  or — the more insidious failure — a stale/absent read gets silently
+  treated as \"nothing there\", losing that tx-block from the fold's
+  merged state. This may be a latent bug in the reference
+  implementation's own analogous `:async-get-fn`
+  (kotoba-lang/kotobase-cljc-worker, flagged separately, not fixed
+  here) — this module closes it for its own copy by construction.
 
   → Promise<{:response resp :persisted bool}>; :persisted false means
   another writer's head update landed first — the Worker's own retry
   loop (unchanged from today) re-runs the whole cycle from a fresh head."
   [^js bucket pfx graph run-fn]
-  (let [buffer (atom {})]
+  (let [buffer (atom {})
+        async-get-fn (fn [cid]
+                       (if (contains? @buffer cid)
+                         (js/Promise.resolve (get @buffer cid))
+                         (r2/cached-block-bytes bucket pfx cid)))]
     (-> (r2/r2-get-head bucket (r2/head-key pfx graph))
         (.then
          (fn [{:keys [chain etag]}]
@@ -255,7 +290,7 @@
                          (if (and (= (:docs before) (:docs after-state))
                                   (= (:streams before) (:streams after-state)))
                            (js/Promise.resolve {:response response :persisted true})
-                           (-> (commit-changes! put! get-fn chain before after-state)
+                           (-> (commit-changes! put! get-fn chain before after-state async-get-fn)
                                (.then
                                 (fn [new-chain]
                                   (-> (js/Promise.all

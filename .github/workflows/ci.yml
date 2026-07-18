@@ -66,6 +66,9 @@ jobs:
       - name: nbb tests (pure shell logic)
         working-directory: kotobase-protocols-worker
         run: nbb --classpath "src:test:../kotobase-protocols/src:../kotobase/src" bin/run_tests.cljs
+      - name: lint engine calls (async-get-fn guardrail, kotoba-lang/kotobase-protocols-worker#1)
+        working-directory: kotobase-protocols-worker
+        run: nbb bin/lint_engine_calls.cljs
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
