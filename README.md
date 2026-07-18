@@ -2,7 +2,12 @@
 
 [![CI](https://github.com/kotoba-lang/kotobase-protocols-worker/actions/workflows/ci.yml/badge.svg)](https://github.com/kotoba-lang/kotobase-protocols-worker/actions/workflows/ci.yml)
 
-Cloudflare Worker **deploy shell** for
+> **Retired deploy shell (2026-07-18).** This repository is retained as
+> migration evidence and a test harness. It must not own a route, bucket,
+> secret, or deployment. The public deployment owner is
+> `gftdcojp/net-kotobase/protocols-worker`.
+
+Historical Cloudflare Worker deploy shell for
 [kotoba-lang/kotobase-protocols](https://github.com/kotoba-lang/kotobase-protocols)
 (ADR-2607174500 in `com-junkawasaki/root`). Serves, live:
 

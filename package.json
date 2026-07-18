@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "shadow-cljs release worker",
-    "deploy": "wrangler deploy"
+    "deploy": "node -e \"throw new Error('retired deploy shell: deploy from gftdcojp/net-kotobase/protocols-worker')\""
   },
   "devDependencies": {
     "@ipld/dag-cbor": "^9.2.0",
