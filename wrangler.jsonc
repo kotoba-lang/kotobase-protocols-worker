@@ -32,16 +32,8 @@
   "main": "out/worker.js",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
-  "routes": [
-    { "pattern": "s3.kotobase.net", "custom_domain": true },
-    { "pattern": "atproto.kotobase.net", "custom_domain": true },
-    { "pattern": "git.kotobase.net", "custom_domain": true },
-    // IPFS Pinning Service API — its own host keeps ipfs.<apex> read-only
-    // (ADR-2607172210 routing note). ipfs.kotobase.net stays with
-    // net-kotobase-ipfs (ADR-2607072000).
-    { "pattern": "pinning.kotobase.net", "custom_domain": true }
-  ],
+  "workers_dev": false,
+  "routes": [],
   "r2_buckets": [
     { "binding": "STATE_BUCKET", "bucket_name": "kotobase-protocols-state" }
   ],
