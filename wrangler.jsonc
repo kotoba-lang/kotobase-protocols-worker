@@ -6,25 +6,18 @@
   // this worker's /ipfs/* only answers on workers.dev (single-origin
   // fallback) for self-hosted-style access.
   //
-  // git.kotobase.net is ALSO deliberately absent from routes below
-  // (ADR-2607177500 incident note): a concurrent session's OWN Worker
-  // (Cloudflare Workers service name "kotobase-git", created/modified
-  // 2026-07-17 mid-session) claimed that custom domain out from under
-  // this Worker's earlier deploys — Cloudflare custom domains are
-  // single-owner and silently reassign to whichever Worker's
-  // `wrangler deploy` last declared the route, no conflict surfaced to
-  // either side. Confirmed via the Workers accounts/.../workers/domains
-  // API (git.kotobase.net -> service "kotobase-git", every other
-  // hostname here -> "kotobase-protocols-worker") and the zone's
-  // firewallEventsAdaptive log (zero WAF/firewall events for
-  // git.kotobase.net at all, ruling that out as the 405 source this
-  // session hit repeatedly). Re-claiming it would be destructive
-  // interference with that other session's in-progress work (the
-  // "並行エージェント運用" guardrail in this workspace's CLAUDE.md) —
-  // NOT re-added here. The git surface itself is fully verified via
-  // the workers.dev /git/* single-origin path (real `git clone`
-  // succeeded end to end against the real content-addressed backend);
-  // only the git.kotobase.net hostname is contested.
+  // git.kotobase.net RECLAIMED 2026-07-18 (ADR-2607189000): the incident
+  // in ADR-2607177500 (a concurrent session's Worker "kotobase-git" took
+  // the custom domain out from under this one, 2026-07-17) was left
+  // unresolved for ~21h. Before reclaiming, confirmed via `wrangler
+  // deployments list --name kotobase-git`: same Cloudflare account/OAuth
+  // identity (not a third party), zero deploys since
+  // 2026-07-17T12:01:58Z, and "kotobase-git" is registered nowhere in
+  // this superproject's manifest/repos.edn or west.yml (not a tracked
+  // project) — grep across 90-docs/adr, manifest, and orgs/ turns up
+  // only this repo's own incident docs. Root-owner explicitly directed
+  // the reclaim (2026-07-18). Re-added below; last `wrangler deploy`
+  // wins on Cloudflare custom domains, same mechanism that took it.
   //
   // Build: npx shadow-cljs release worker → out/worker.js
   // Writes are fail-closed without the WRITE_TOKEN secret
@@ -43,9 +36,7 @@
   "routes": [
     { "pattern": "s3.kotobase.net", "custom_domain": true },
     { "pattern": "atproto.kotobase.net", "custom_domain": true },
-    // git.kotobase.net intentionally NOT listed — see the comment
-    // block above (contested with a concurrent session's own Worker).
-    // /git/* still works, on workers.dev.
+    { "pattern": "git.kotobase.net", "custom_domain": true },
     // IPFS Pinning Service API — its own host keeps ipfs.<apex> read-only
     // (ADR-2607172210 routing note). ipfs.kotobase.net stays with
     // net-kotobase-ipfs (ADR-2607072000).
