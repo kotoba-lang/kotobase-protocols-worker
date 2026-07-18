@@ -10,19 +10,21 @@ Cloudflare Worker **deploy shell** for
 |---|---|
 | `s3.kotobase.net` | S3 object API |
 | `atproto.kotobase.net` | AT-Proto XRPC tenant data-plane |
+| `git.kotobase.net` | git dumb-HTTP (`/info/refs`, `/HEAD`, `/objects/*`) |
 | `pinning.kotobase.net` | [IPFS Pinning Service API](https://ipfs.github.io/pinning-services-api-spec/) |
-| `kotobase-protocols-worker.*.workers.dev` | all of the above **plus git**, via `/s3/*`, `/xrpc/*`, `/git/*`, `/ipfs/*`, `/pins*` |
+| `kotobase-protocols-worker.*.workers.dev` | all of the above, via `/s3/*`, `/xrpc/*`, `/git/*`, `/ipfs/*`, `/pins*` |
 
 `ipfs.kotobase.net` is deliberately **not** routed here — that hostname is
-owned by `gftdcojp/net-kotobase-ipfs` (ADR-2607072000). `git.kotobase.net`
-is ALSO not routed here, but for a different, non-deliberate reason: a
-concurrent session's own Worker (Cloudflare service `kotobase-git`) claimed
-that custom domain out from under this one mid-session (custom domains are
-single-owner; the last `wrangler deploy` to declare a route wins, with no
-conflict surfaced to either side) — see ADR-2607177500's incident log.
-Re-claiming it would mean fighting a concurrent session for a shared
-resource, so the git surface is fully real and fully tested, just currently
-reachable only via `/git/*` on workers.dev, not a `git.` subdomain.
+owned by `gftdcojp/net-kotobase-ipfs` (ADR-2607072000).
+
+`git.kotobase.net` was briefly lost to a concurrent session's own Worker
+(Cloudflare service `kotobase-git`) that claimed the custom domain out from
+under this one mid-session on 2026-07-17 (custom domains are single-owner;
+last `wrangler deploy` to declare a route wins, no conflict surfaced to
+either side) — see ADR-2607177500's incident log. It was reclaimed
+2026-07-18 (ADR-2607189000) after confirming `kotobase-git` was inactive
+(no deploys since 2026-07-17T12:01:58Z) and unregistered anywhere in the
+superproject manifest.
 
 ## How it persists
 
@@ -115,32 +117,18 @@ superproject `secrets-location-map` skill (ADR-2607176000).
 them back. The CID matches what any IPFS tool computes for the same
 bytes.
 
-## Diagnostics
-
-`GET /_diag/health[?graph=<name>]` (ADR-2607178500) — public, read-only,
-never touches `kotobase.protocols.router` or `LocalStore`, just the real
-engine's own O(1) novelty-count check for one graph (default the shared
-graph; pass `?graph=atproto-repo/<did>` to inspect a tenant's own chain):
-
-```json
-{"graph": "kotobase-protocols-v2", "chain_present": true,
- "novelty_size": 18, "should_fold": false}
-```
-
-Exists because diagnosing the fold gap (see "How it persists" above)
-required manually timing a plain read and guessing at the cause — this
-makes graph health directly observable instead. `should_fold: true`
-should never actually be seen in practice (`commit-changes!` folds
-automatically the moment `novelty_size` crosses the threshold); if it
-ever does, something's wrong with the auto-fold path itself.
-
 ## Seeding a git repo
 
 `bin/seed_git.cljs` pushes a local repo's loose objects, refs and HEAD
-into the git surface so it clones over dumb-HTTP. Currently workers.dev
-only (see the git.kotobase.net note above):
+into the git surface so it clones over dumb-HTTP. Works on both
+`git.kotobase.net` and workers.dev (same backend):
 
 ```bash
+KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljs \
+  <local-repo> kotoba-lang/<name> https://git.kotobase.net
+git clone https://git.kotobase.net/kotoba-lang/<name>
+
+# or, single-origin fallback:
 KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljs \
   <local-repo> kotoba-lang/<name> https://kotobase-protocols-worker.<account>.workers.dev/git
 git clone https://kotobase-protocols-worker.<account>.workers.dev/git/kotoba-lang/<name>
