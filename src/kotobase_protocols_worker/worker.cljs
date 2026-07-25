@@ -45,11 +45,12 @@
             [kotobase-protocols-worker.core :as core]
             [kotobase-protocols-worker.graph :as graph]
             [kotobase-protocols-worker.kotobase-store :as ks]
-            [kotobase-protocols-worker.sigv4 :as sigv4]
             [kotobase.protocols.blocks :as blocks]
             [kotobase.protocols.cid :as cid]
             [kotobase.protocols.json :as json]
-            [kotobase.protocols.router :as router]))
+            [kotobase.protocols.router :as router]
+            [sigv4.crypto :as sigv4-crypto]
+            [sigv4.verify :as sigv4]))
 
 ;; ---------------------------------------------------------------- bytes
 
@@ -81,22 +82,22 @@
 
 ;; ---------------------------------------------------------------- sigv4
 
-(defn- hmac [key-data data-str]
-  (-> (js/crypto.subtle.importKey
-       "raw" key-data #js {:name "HMAC" :hash "SHA-256"} false #js ["sign"])
-      (.then (fn [k] (js/crypto.subtle.sign "HMAC" k (te data-str))))))
+(def ^:private signer-crypto (sigv4-crypto/crypto))
 
-(defn- derive-signature [secret {:keys [date region service]} string-to-sign]
-  (-> (hmac (te (str "AWS4" secret)) date)
-      (.then #(hmac % region))
-      (.then #(hmac % service))
-      (.then #(hmac % "aws4_request"))
-      (.then #(hmac % string-to-sign))
-      (.then ab->hex)))
+(defn sigv4-verify
+  "Promise<boolean>: recompute the request signature from the secrets and the
+  RAW payload, require the declared payload hash to match.
 
-(defn- sigv4-verify
-  "Promise<boolean>: recompute the request signature from the secrets
-  and the RAW payload, require the declared payload hash to match."
+  Canonicalization, the HMAC ladder and the comparison all come from
+  kotoba-lang/sigv4 — this worker used to carry its own, and the copy encoded
+  with charCodeAt, so any non-ASCII key or query value signed as UTF-16 and
+  disagreed with every S3 client. What is left here is this worker's own
+  policy: which access key is accepted, and that the declared payload hash
+  must match the body we actually received.
+
+  Public so `worker-test` can drive it with a request signed by the same shared
+  library a real S3 client would use — the one behaviour extracting the signer
+  could have broken, and which nothing here covered before."
   [^js env req body-ab]
   (let [p (sigv4/parse-authorization (get (:headers req) "authorization"))
         akid (.-S3_ACCESS_KEY_ID env)
@@ -112,15 +113,17 @@
                         (not= declared "UNSIGNED-PAYLOAD")
                         (not= declared actual-hash))
                  false
-                 (let [cr (sigv4/canonical-request req (:signed-headers p) payload-hash)]
-                   (-> (.then (sha256 (te cr)) ab->hex)
-                       (.then (fn [crh]
-                                (derive-signature
-                                 secret p
-                                 (sigv4/string-to-sign
-                                  (get (:headers req) "x-amz-date")
-                                  (sigv4/scope p) crh))))
-                       (.then (fn [sig] (= sig (:signature p))))))))))))))
+                 (-> (sigv4/expected-signature
+                      signer-crypto
+                      {:secret-key secret
+                       :parsed p
+                       :amz-date (get (:headers req) "x-amz-date")
+                       :payload-hash payload-hash
+                       :request req})
+                     ;; constant-time: `=` on hex short-circuits at the first
+                     ;; differing character, and this endpoint will answer as
+                     ;; many times as an attacker asks.
+                     (.then #(sigv4/constant-time-eq? (:signature p) %)))))))))))
 
 (defn- cacao-authorized?
   "Promise<boolean>. Parses the body only on this fallback path (Bearer

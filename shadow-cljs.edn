@@ -8,6 +8,10 @@
 {:source-paths
  ["src"
   "test"
+  ;; AWS SigV4 (ADR-2607254100): the shared signer/verifier. This repo
+  ;; carried the verification half, which percent-encoded with charCodeAt
+  ;; and so signed non-ASCII as UTF-16.
+  "../sigv4/src"
   "../kotobase-protocols/src"
   "../kotobase/src"
   ;; CACAO verify (ADR-2607177000): kotobase-client is the byte-exact
