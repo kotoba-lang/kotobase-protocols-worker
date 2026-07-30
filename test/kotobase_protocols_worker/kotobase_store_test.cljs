@@ -158,9 +158,19 @@
 
   The cause is in `kotobase-r2/with-blocks`, whose own docstring names it: `f`
   is re-run per miss, which is correct for any tree shape and efficient only
-  once a read touches few blocks (the prefix-pruning follow-up, #13). Its cache
-  is per-call, so each of the 70 writes rebuilds it from empty and re-executes
-  `f` once per block it touches, and the cost climbs as the graph grows.
+  once a read touches few blocks (the prefix-pruning follow-up, #13).
+
+  The per-call cache was the obvious suspect and was measured out. Having
+  `sync-get` consult the module-level immutable block cache before unwinding
+  moved this test's 20s throughput from 26-30 writes to 27-33 — overlapping
+  ranges over three runs each, so no demonstrable effect, and that change was
+  not kept. The reason it does not help here is that a freshly written block is
+  not in the module cache until something reads it once, so each write still
+  pays one restart per block it creates.
+
+  What remains is inherent to restarting `f` rather than resuming it. Removing
+  it needs either fewer touched blocks (#13's prefix pruning) or a trampoline
+  that resumes — not a cache.
 
   Unbounded, this ran forever, which is worse than failing: it stopped the two
   `diagnose-*` tests below from ever running, and a suite that hangs teaches
@@ -201,9 +211,9 @@
                  (js/Promise.reject
                   (js/Error. (str "the fold path did not finish in "
                                   fold-test-budget-ms "ms — stopped with "
-                                  n " of 70 writes left. with-blocks re-runs f "
-                                  "per block miss and its cache is per-call, so "
-                                  "each write re-fetches the graph; see "
+                                  n " of 70 writes left. with-blocks restarts f "
+                                  "once per new block, so each write pays a "
+                                  "restart per block it creates; see "
                                   "fold-test-budget-ms and #13")))
                  (zero? n) (js/Promise.resolve nil)
                  :else (.then (write-one n) (fn [_] (write-n (dec n))))))]
