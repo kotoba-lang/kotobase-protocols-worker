@@ -126,30 +126,57 @@
                      (.then #(sigv4/constant-time-eq? (:signature p) %)))))))))))
 
 (defn- cacao-authorized?
-  "Promise<boolean>. Parses the body only on this fallback path (Bearer
-  and SigV4 never need it) — a large S3/ipfs write body is never
-  JSON-parsed just to look for a CACAO that isn't there."
+  "Promise<issuer-did | false>. Parses the body only on this fallback path
+  (Bearer and SigV4 never need it) — a large S3/ipfs write body is never
+  JSON-parsed just to look for a CACAO that isn't there.
+
+  Returns the issuer rather than a boolean so the record can say *whose* DID
+  authorised the write. A `true` here and a `true` from the break-glass token
+  were the same value, which is what made them indistinguishable afterwards."
   [^js env req]
   (let [parsed (try (json/parse (or (:body req) "{}")) (catch :default _ {}))
         token (cacao/from-request req parsed)
         issuer (some-> token cacao/verify-cacao)]
     (js/Promise.resolve
-     (boolean
-      (and issuer
-           (if (graph/atproto-surface? req)
-             (= issuer (get parsed "repo"))
-             (cacao/operator-allowed? issuer (.-CACAO_OPERATOR_DIDS env))))))))
+     (if (and issuer
+              (if (graph/atproto-surface? req)
+                (= issuer (get parsed "repo"))
+                (cacao/operator-allowed? issuer (.-CACAO_OPERATOR_DIDS env))))
+       issuer
+       false))))
 
-(defn- write-authorized? [^js env req body-ab]
+(defn- write-authority
+  "Which authority admits this write. Returns Promise<authority-map>.
+
+  The three paths used to collapse to a boolean, so a write made with the
+  break-glass credential looked in the record exactly like one a customer's own
+  DID authorised. The order is unchanged; what changed is that the answer says
+  which one it was."
+  [^js env req body-ab]
   (cond
-    (core/authorized-write? req (.-WRITE_TOKEN env))
-    (js/Promise.resolve true)
+    (core/break-glass? req (.-WRITE_TOKEN env))
+    (js/Promise.resolve (core/write-authority {:kind :break-glass}))
 
     (some-> (get (:headers req) "authorization")
             (str/starts-with? "AWS4-HMAC-SHA256 "))
-    (sigv4-verify env req body-ab)
+    (-> (sigv4-verify env req body-ab)
+        (.then (fn [ok?]
+                 (core/write-authority
+                  (if ok?
+                    {:kind :sigv4
+                     :subject (some-> (sigv4/parse-authorization
+                                       (get (:headers req) "authorization"))
+                                      :access-key)}
+                    {:kind :none})))))
 
-    :else (cacao-authorized? env req)))
+    :else
+    (-> (cacao-authorized? env req)
+        (.then (fn [issuer-or-false]
+                 (core/write-authority
+                  (if issuer-or-false
+                    {:kind :cacao
+                     :subject (when (string? issuer-or-false) issuer-or-false)}
+                    {:kind :none})))))))
 
 ;; ------------------------------------------------------------- requests
 
@@ -256,12 +283,12 @@
   (if (diag-health? req)
     (diag-health-response env req)
     (-> (if (core/write? req)
-          (write-authorized? env req body-ab)
-          (js/Promise.resolve true))
+          (write-authority env req body-ab)
+          (js/Promise.resolve (core/write-authority {:kind :break-glass})))
         (.then
-         (fn [ok?]
+         (fn [authority]
            (cond
-             (not ok?)
+             (not (core/admitted? authority))
              (ring->response
               (core/unauthorized-response (some? (.-WRITE_TOKEN env))))
 
