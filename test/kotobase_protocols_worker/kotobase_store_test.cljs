@@ -148,7 +148,30 @@
                   (done)))
          (.catch (fn [e] (t/is false (.-message e)) (done)))))))
 
+(def ^:private fold-test-budget-ms
+  "How long the 70-commit fold path may take before this test gives up on it.
+
+  It is bounded because it does not finish. Measured on 2026-07-30 against a
+  checkout of every sibling at origin/main: ten minutes produced 1864 block
+  fetches for 146 distinct CIDs — the same block pulled about thirteen times —
+  and the working set was still growing.
+
+  The cause is in `kotobase-r2/with-blocks`, whose own docstring names it: `f`
+  is re-run per miss, which is correct for any tree shape and efficient only
+  once a read touches few blocks (the prefix-pruning follow-up, #13). Its cache
+  is per-call, so each of the 70 writes rebuilds it from empty and re-executes
+  `f` once per block it touches, and the cost climbs as the graph grows.
+
+  Unbounded, this ran forever, which is worse than failing: it stopped the two
+  `diagnose-*` tests below from ever running, and a suite that hangs teaches
+  people not to run it — which is how a suite stops being able to tell anybody
+  anything. In the default node mode the process died early on an unrelated
+  unobserved rejection, so the whole thing even looked like a fast failure."
+  20000)
+
 (deftest novelty-folds-past-the-threshold
+  ;; Bounded by `fold-test-budget-ms` — see there for what was measured.
+  ;;
   ;; ADR-2607177500 incident: without commit-changes! folding, novelty
   ;; grows unboundedly and even a plain read degrades badly (found live:
   ;; ~150 unfolded commits made a list read take >30s in production).
@@ -158,7 +181,8 @@
   ;; still happens to be correct (which the equivalence test above
   ;; already covers, at a scale too small to ever trigger folding).
   (async done
-   (let [bucket (fake-bucket)]
+   (let [bucket (fake-bucket)
+         deadline (+ (js/Date.now) fold-test-budget-ms)]
      (letfn [(write-one [i]
                (ks/hydrate-run-persist!
                 bucket "" "fold-graph"
@@ -167,9 +191,22 @@
                     (st/-put store [:s3 "bkt"] (str "k" i) {:i i})
                     {:after-state (content (local/snapshot store)) :response nil}))))
              (write-n [n]
-               (if (zero? n)
-                 (js/Promise.resolve nil)
-                 (.then (write-one n) (fn [_] (write-n (dec n))))))]
+               ;; the deadline is checked in the loop rather than raced against
+               ;; it: a `Promise.race` leaves the loser running, and the loser
+               ;; here is the CPU-bound work itself, so the process stays busy
+               ;; and every later test still never gets a turn. Stopping the
+               ;; loop is what actually stops the work.
+               (cond
+                 (> (js/Date.now) deadline)
+                 (js/Promise.reject
+                  (js/Error. (str "the fold path did not finish in "
+                                  fold-test-budget-ms "ms — stopped with "
+                                  n " of 70 writes left. with-blocks re-runs f "
+                                  "per block miss and its cache is per-call, so "
+                                  "each write re-fetches the graph; see "
+                                  "fold-test-budget-ms and #13")))
+                 (zero? n) (js/Promise.resolve nil)
+                 :else (.then (write-one n) (fn [_] (write-n (dec n))))))]
        (-> (write-n 70) ;; > default-fold-threshold (64)
            (.then
             (fn [_]
