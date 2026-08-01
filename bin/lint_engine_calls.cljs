@@ -12,14 +12,24 @@
 (def target-files
   ["src/kotobase_protocols_worker/kotobase_store.cljs"])
 
-(def min-fold-args
-  "put! get-fn chain-cid ref? max-novelty blind-fn encrypt-fn decrypt-fn
-  cache-get cache-put! async-get-fn — the 11-arg arity is the minimum that
-  actually threads async-get-fn through (kotobase-peer.core/fold!, see its
-  own arities). Fewer args silently falls back to the sync `with-blocks`
+(def guarded-calls
+  "Every kotobase-peer.core entry point whose LAST parameter is
+  `async-get-fn`, with the minimum arg count that actually threads it
+  through. Fewer args silently falls back to the sync `with-blocks`
   trampoline via nil defaults — no error, no warning, just slow (this is
-  exactly how the bug shipped the first time)."
-  11)
+  exactly how the bug shipped the first time, twice).
+
+  `eng/fold!` (11): put! get-fn chain-cid ref? max-novelty blind-fn
+  encrypt-fn decrypt-fn cache-get cache-put! async-get-fn.
+
+  `eng/hot-datoms` (7): get-fn chain-cid opts visible? blind-fn decrypt-fn
+  async-get-fn. Added after the READ path was found still on the sync
+  trampoline while the WRITE path had been fixed — #1's guardrail only
+  covered fold!, so the same class of bug survived in `hydrate!` and
+  `doc-point-query`. A guardrail that names one function protects one
+  function; this one is keyed by the whole set."
+  {"(eng/fold!" 11
+   "(eng/hot-datoms" 7})
 
 (defn- balanced-form
   "From `text` starting at the '(' at `start`, return the full balanced
@@ -43,29 +53,34 @@
   [form-str]
   (count (rest (reader/read-string form-str))))
 
+(defn- lint-call [text path call min-args]
+  (loop [idx 0 problems []]
+    (let [found (str/index-of text call idx)]
+      (if (nil? found)
+        problems
+        (let [form (balanced-form text found)
+              n-args (fold-call-arg-count form)
+              problems' (if (< n-args min-args)
+                          (conj problems {:file path :call call :n-args n-args
+                                          :min-args min-args
+                                          :snippet (subs form 0 (min 80 (count form)))})
+                          problems)]
+          (recur (+ found (count form)) problems'))))))
+
 (defn- lint-file [path]
   (let [text (str (fs/readFileSync path "utf8"))]
-    (loop [idx 0 problems []]
-      (let [found (str/index-of text "(eng/fold!" idx)]
-        (if (nil? found)
-          problems
-          (let [form (balanced-form text found)
-                n-args (fold-call-arg-count form)
-                problems' (if (< n-args min-fold-args)
-                            (conj problems {:file path :n-args n-args
-                                            :snippet (subs form 0 (min 80 (count form)))})
-                            problems)]
-            (recur (+ found (count form)) problems')))))))
+    (mapcat (fn [[call min-args]] (lint-call text path call min-args)) guarded-calls)))
 
 (defn -main []
   (let [all-problems (mapcat lint-file target-files)]
     (if (seq all-problems)
       (do
-        (println "lint_engine_calls: FAIL —" (count all-problems) "eng/fold! call(s) missing :async-get-fn")
-        (doseq [{:keys [file n-args snippet]} all-problems]
-          (println (str "  " file ": " n-args " args (need >= " min-fold-args ") — " snippet "...")))
-        (println "  See kotoba-lang/kotobase-protocols-worker#1 / ADR-2607189000 addendum 2.")
+        (println "lint_engine_calls: FAIL —" (count all-problems) "engine call(s) missing async-get-fn")
+        (doseq [{:keys [file call n-args min-args snippet]} all-problems]
+          (println (str "  " file ": " call " with " n-args " args (need >= " min-args ") — " snippet "...")))
+        (println "  See kotoba-lang/kotobase-protocols-worker#1 / ADR-2607189000 addendum 2")
+        (println "  and ADR-2607310900 (the read path carried the same cost after the write path was fixed).")
         (set! (.-exitCode js/process) 1))
-      (println "lint_engine_calls: OK — every eng/fold! call threads :async-get-fn"))))
+      (println "lint_engine_calls: OK — every guarded engine call threads async-get-fn"))))
 
 (-main)

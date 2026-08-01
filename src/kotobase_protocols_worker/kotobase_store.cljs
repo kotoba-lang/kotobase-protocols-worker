@@ -78,10 +78,30 @@
   attribute's rows come back grouped) and folds them back into
   {:docs {...} :streams {...} :seq n :revision n}. `:revision`/`:seq`
   are recovered as event/doc counts (not persisted separately — the
-  chain itself is the revision log)."
-  [get-fn chain-cid]
+  chain itself is the revision log).
+
+  `async-get-fn` (REQUIRED, same guardrail rationale as `fold-if-due!`'s):
+  this is a FULL-PREFIX scan — no `:components`, so prolly-tree's prefix
+  pruning cannot bound it and the walk touches every block of the :aevt
+  index. Over the `with-blocks` sync trampoline that costs O(N) SEQUENTIAL
+  R2 round trips (one block discovered per retry) and O(N²) node decodes
+  (each retry re-walks and re-decodes from the root, since the trampoline
+  caches bytes, not decoded nodes). `kotobase-peer.core/hot-datoms`'s
+  7-arity routes the snapshot half through `cold-datoms-async` /
+  `prolly-tree.core/scan-prefix-async` — concurrent per level, each node
+  decoded once — which is the same fix `fold-if-due!` already applies to
+  the fold's own hydrate. This call site was left on the sync path when
+  kotoba-lang/kotobase-protocols-worker#1 fixed the fold path, so the READ
+  path kept paying the cost the WRITE path had stopped paying.
+
+  Measured (kotobase-peer bench/results/2026-08-01-dag-shape.edn): the
+  :aevt tree is WIDE and SHALLOW — height 2-3, fanout ~10 — so the sync
+  trampoline's round trips scale with block COUNT while the async walk's
+  scale with tree HEIGHT. The unfolded-novelty half is a cons chain and
+  stays sequential under both."
+  [get-fn chain-cid async-get-fn]
   (-> (eng/hot-datoms get-fn chain-cid {:index :aevt} visible-all
-                      crypto/blind-fn crypto/decrypt-fn)
+                      crypto/blind-fn crypto/decrypt-fn async-get-fn)
       (.then
        (fn [rows]
          (let [by-e (group-by :e rows)
@@ -114,10 +134,17 @@
   "Promise<vec of rows> for one known eid — a cheap :eavt point lookup,
   used to find the OLD \"doc/val\" quad (if any) to retract before
   asserting the new one (this substrate has no cardinality-one; an
-  unretracted re-assert would leave both values visible)."
-  [get-fn chain-cid eid]
+  unretracted re-assert would leave both values visible).
+
+  `async-get-fn` for the same reason as `hydrate!`'s, with a smaller
+  blast radius: `:components [eid]` DOES let prolly-tree prune to one
+  root-to-leaf path, so this walk touches O(tree height) blocks rather
+  than all of them — but under the sync trampoline even those are
+  discovered one per retry, and this runs once per changed doc in a
+  write, so the round trips multiply by the diff size."
+  [get-fn chain-cid eid async-get-fn]
   (eng/hot-datoms get-fn chain-cid {:index :eavt :components [eid]} visible-all
-                  crypto/blind-fn crypto/decrypt-fn))
+                  crypto/blind-fn crypto/decrypt-fn async-get-fn))
 
 (defn diff->tx-data!
   "Promise<tx-data vec> for the docs/streams that actually changed
@@ -125,8 +152,8 @@
   the Worker computes this from its existing before/after :docs/:streams
   snapshots, so only genuinely touched entities enter tx-data, keeping
   every commit O(diff) like kotobase-peer's own commit! promises, not
-  O(whole graph))."
-  [get-fn chain-cid before after]
+  O(whole graph)). `async-get-fn` — see `doc-point-query`."
+  [get-fn chain-cid before after async-get-fn]
   (let [changed-docs
         (for [[coll kvs] (:docs after)
               [k v] kvs
@@ -139,7 +166,7 @@
           [stream ev])]
     (-> (js/Promise.all
          (clj->js (for [[coll k _v] changed-docs]
-                    (doc-point-query get-fn chain-cid (doc-eid coll k)))))
+                    (doc-point-query get-fn chain-cid (doc-eid coll k) async-get-fn))))
         (.then
          (fn [rows-per-doc]
            (let [doc-tx
@@ -204,7 +231,7 @@
   folding afterward if the engine's own threshold says novelty is due.
   `async-get-fn` — see `fold-if-due!`."
   [put! get-fn chain-cid before after async-get-fn]
-  (-> (diff->tx-data! get-fn chain-cid before after)
+  (-> (diff->tx-data! get-fn chain-cid before after async-get-fn)
       (.then (fn [tx-data]
                (if (empty? tx-data)
                  (js/Promise.resolve chain-cid)
@@ -283,7 +310,7 @@
             (fn [sync-get]
               (let [get-fn (fn [cid] (if (contains? @buffer cid) (get @buffer cid) (sync-get cid)))
                     put! (fn [cid bytes] (swap! buffer assoc cid bytes))]
-                (-> (hydrate! get-fn chain)
+                (-> (hydrate! get-fn chain async-get-fn)
                     (.then
                      (fn [before]
                        (let [{:keys [after-state response]} (run-fn before)]
