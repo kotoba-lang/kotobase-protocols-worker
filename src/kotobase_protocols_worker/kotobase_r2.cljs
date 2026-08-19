@@ -22,6 +22,24 @@
   [e]
   (boolean (:block-miss (ex-data e))))
 
+(defn miss-data
+  "The block-miss payload carried by `e`, or nil — read from the CAUSE CHAIN.
+
+  A runtime may WRAP the signal rather than rethrow it: nbb/SCI, when the throw
+  crosses an async continuation, produces its own error whose `ex-data` is
+  `{:type :sci/error …}` and puts the original under `:cause`. Reading one link
+  deep makes the miss invisible there, so the retry never happens and the read
+  fails as a generic error. On the JVM and under shadow-cljs the chain is one
+  link long, so this returns exactly what `(ex-data e)` returned before.
+  Root ADR-2608190100."
+  [e]
+  (loop [e e n 0]
+    (cond
+      (nil? e) nil
+      (> n 8) nil                       ; a cycle must not hang the read path
+      (:block-miss (ex-data e)) (ex-data e)
+      :else (recur (ex-cause e) (inc n)))))
+
 (defn with-blocks
   "Run `(f sync-get)` where `sync-get` reads from an in-memory cache, fetching
   absent blocks via `(fetch1 cid) -> Promise<bytes>` and retrying. Returns a
@@ -39,16 +57,21 @@
                      (get @cache cid)
                      (throw (missing-block cid))))]
     (letfn [(fetch-and-retry [e]
-              (if (:block-miss (ex-data e))
-                (-> (fetch1 (:cid (ex-data e)))
+              (if-let [d (miss-data e)]
+                (-> (fetch1 (:cid d))
                     (.then (fn [bytes]
-                             (swap! cache assoc (:cid (ex-data e)) bytes)
+                             (swap! cache assoc (:cid d) bytes)
                              (step))))
                 (js/Promise.reject e)))
             (step []
               (try
                 (-> (js/Promise.resolve (f sync-get))
-                    (.catch fetch-and-retry))
+                    ;; The wrapper is load-bearing: under nbb/SCI a `letfn`
+                    ;; sibling passed BY NAME to a JS callback is never invoked,
+                    ;; so `(.catch fetch-and-retry)` silently did nothing and the
+                    ;; async miss escaped as a generic error. Correct on every
+                    ;; runtime. Root ADR-2608190100.
+                    (.catch (fn [e] (fetch-and-retry e))))
                 (catch :default e (fetch-and-retry e))))]
       (step))))
 
