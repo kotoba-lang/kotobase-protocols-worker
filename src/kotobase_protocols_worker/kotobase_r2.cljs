@@ -9,6 +9,11 @@
   the #13 follow-up). Pure enough to test with a promise-returning fake `fetch1`."
   (:require [clojure.string :as str]))
 
+;; Defined below, next to the cache it reads. Declared here because the
+;; trampoline is the first thing in this file and moving either would make the
+;; diff about layout instead of about behaviour.
+(declare cached-block-peek)
+
 (defn missing-block
   "Signal thrown by the sync get-fn on a cache miss; caught by with-blocks. The
   `:block-miss` marker lets handler/handle re-throw it (rather than swallow it as
@@ -35,9 +40,20 @@
   [fetch1 f]
   (let [cache (atom {})
         sync-get (fn [cid]
-                   (if (contains? @cache cid)
-                     (get @cache cid)
-                     (throw (missing-block cid))))]
+                   (cond
+                     (contains? @cache cid) (get @cache cid)
+                     ;; the module cache holds blocks this isolate has already
+                     ;; read. Consulting it here is what stops the trampoline
+                     ;; from re-running `f` for a block we already have: the
+                     ;; restart is the expensive half, not the fetch. Sound for
+                     ;; the reason the cache exists at all — a CID's bytes can
+                     ;; never change, so serving them earlier changes cost and
+                     ;; not semantics. It never holds nil, so `some?` is the
+                     ;; whole check.
+                     :else (let [known (cached-block-peek cid)]
+                             (if (some? known)
+                               (do (swap! cache assoc cid known) known)
+                               (throw (missing-block cid))))))]
     (letfn [(fetch-and-retry [e]
               (if (:block-miss (ex-data e))
                 (-> (fetch1 (:cid (ex-data e)))
@@ -94,6 +110,14 @@
             (swap! block-cache-bytes - (.-length (.get block-cache oldest)))
             (.delete block-cache oldest)
             (recur)))))))
+
+(defn cached-block-peek
+  "Bytes for `cid` if this isolate has already read them, else nil.
+
+  Synchronous on purpose: it is the question `with-blocks` needs answered
+  before it decides to unwind and re-run its computation."
+  [cid]
+  (when (.has block-cache cid) (.get block-cache cid)))
 
 (defn cached-block-bytes
   "Promise<Uint8Array|nil> for an immutable block `cid`: isolate-memory cache
