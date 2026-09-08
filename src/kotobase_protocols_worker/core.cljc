@@ -10,7 +10,7 @@
   the real content-addressed backend, as the per-request in-memory
   materialization kotobase-protocols-worker.kotobase-store hydrates
   from and diffs back to R2 (ADR-2607177500)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kotobase.local :as local]))
 
 (def empty-state
@@ -98,4 +98,4 @@
 (defn normalize-headers
   "Lower-case header names once at the boundary."
   [pairs]
-  (into {} (map (fn [[k v]] [(str/lower-case k) v])) pairs))
+  (into {} (map (fn [[k v]] [(str/lower k) v])) pairs))
