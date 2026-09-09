@@ -17,7 +17,7 @@
   Every other request — s3/git/pinning, and atproto's OWN
   sync.getBlob (reads the SHARED block space POST /ipfs populates,
   not any repo's own doc space) — uses the single shared admin graph."
-  (:require [kotoba.lang.text :as str]
+  (:require [clojure.string :as str]
             [kotobase.protocols.json :as json]
             [kotobase.protocols.router :as router]))
 
