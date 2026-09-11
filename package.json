@@ -2,7 +2,7 @@
   "name": "kotobase-protocols-worker",
   "private": true,
   "scripts": {
-    "build": "shadow-cljs release worker",
+    "build": "amu compile --target wasm32-browser worker",
     "deploy": "node -e \"throw new Error('retired deploy shell: deploy from gftdcojp/net-kotobase/protocols-worker')\""
   },
   "devDependencies": {

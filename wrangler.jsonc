@@ -19,7 +19,7 @@
   // the reclaim (2026-07-18). Re-added below; last `wrangler deploy`
   // wins on Cloudflare custom domains, same mechanism that took it.
   //
-  // Build: npx shadow-cljs release worker → out/worker.js
+  // Build: amu compile --target wasm32-browser worker → out/worker.js
   // Writes are fail-closed without the WRITE_TOKEN secret
   // (wrangler secret put WRITE_TOKEN).
   //

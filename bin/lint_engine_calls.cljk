@@ -3,7 +3,7 @@
 ;; with-blocks sync-retry trampoline cost on every fold — the same pattern
 ;; ADR-2607120730/gftdcojp/app-aozora#78 already diagnosed and
 ;; kotobase-cljc-worker's do-fold already avoids). Run:
-;;   nbb bin/lint_engine_calls.cljk
+;;   kbb --backend sci bin/lint_engine_calls.cljk
 (ns lint-engine-calls
   (:require ["fs" :as fs]
             [cljs.reader :as reader]
