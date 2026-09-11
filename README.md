@@ -129,12 +129,12 @@ into the git surface so it clones over dumb-HTTP. Works on both
 `git.kotobase.net` and workers.dev (same backend):
 
 ```bash
-KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljk \
+KOTOBASE_WRITE_TOKEN=$TOKEN kbb --backend sci bin/seed_git.cljk \
   <local-repo> kotoba-lang/<name> https://git.kotobase.net
 git clone https://git.kotobase.net/kotoba-lang/<name>
 
 # or, single-origin fallback:
-KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljk \
+KOTOBASE_WRITE_TOKEN=$TOKEN kbb --backend sci bin/seed_git.cljk \
   <local-repo> kotoba-lang/<name> https://kotobase-protocols-worker.<account>.workers.dev/git
 git clone https://kotobase-protocols-worker.<account>.workers.dev/git/kotoba-lang/<name>
 ```
@@ -148,16 +148,16 @@ backend above.
 
 ```bash
 # pure-logic tests (core/sigv4; nbb, first-class runtime)
-nbb --classpath "src:test:../kotobase-protocols/src:../kotobase/src" bin/run_tests.cljk
+kbb --backend sci --classpath "src:test:../kotobase-protocols/src:../kotobase/src" bin/run_tests.cljk
 
 # real-crypto tests (CACAO verify + the datom-store bridge; needs real
 # @noble/curves/@ipld/dag-cbor/@noble/hashes — shadow-cljs :node-test,
 # not nbb, same reason kotobase-client's own suite avoids nbb)
 npm ci
-npx shadow-cljs compile test && node out/node-tests.js
+amu compile --target wasm32-browser test && node out/node-tests.js
 
 # build (in the superproject, go through the resource governor)
-npx shadow-cljs release worker     # → out/worker.js (:esm)
+amu compile --target wasm32-browser worker     # → out/worker.js (:esm)
 
 # deploy
 npx wrangler deploy

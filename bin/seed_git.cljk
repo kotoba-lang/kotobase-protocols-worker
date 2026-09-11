@@ -2,7 +2,7 @@
 ;; kotobase-protocols worker (ADR-2607176000), making it clonable over
 ;; git's dumb-HTTP transport:
 ;;
-;;   KOTOBASE_WRITE_TOKEN=… nbb bin/seed_git.cljk \
+;;   KOTOBASE_WRITE_TOKEN=… kbb --backend sci bin/seed_git.cljk \
 ;;     <local-repo-path> <remote-repo-path> <base-url>
 ;;   # e.g. … . kotoba-lang/kotobase-protocols https://git.kotobase.net
 ;;
