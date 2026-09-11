@@ -124,17 +124,17 @@ bytes.
 
 ## Seeding a git repo
 
-`bin/seed_git.cljs` pushes a local repo's loose objects, refs and HEAD
+`bin/seed_git.cljk` pushes a local repo's loose objects, refs and HEAD
 into the git surface so it clones over dumb-HTTP. Works on both
 `git.kotobase.net` and workers.dev (same backend):
 
 ```bash
-KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljs \
+KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljk \
   <local-repo> kotoba-lang/<name> https://git.kotobase.net
 git clone https://git.kotobase.net/kotoba-lang/<name>
 
 # or, single-origin fallback:
-KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljs \
+KOTOBASE_WRITE_TOKEN=$TOKEN nbb bin/seed_git.cljk \
   <local-repo> kotoba-lang/<name> https://kotobase-protocols-worker.<account>.workers.dev/git
 git clone https://kotobase-protocols-worker.<account>.workers.dev/git/kotoba-lang/<name>
 ```
@@ -148,7 +148,7 @@ backend above.
 
 ```bash
 # pure-logic tests (core/sigv4; nbb, first-class runtime)
-nbb --classpath "src:test:../kotobase-protocols/src:../kotobase/src" bin/run_tests.cljs
+nbb --classpath "src:test:../kotobase-protocols/src:../kotobase/src" bin/run_tests.cljk
 
 # real-crypto tests (CACAO verify + the datom-store bridge; needs real
 # @noble/curves/@ipld/dag-cbor/@noble/hashes — shadow-cljs :node-test,
